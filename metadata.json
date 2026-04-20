@@ -1,0 +1,5 @@
+{
+  "name": "Arabic Text Frequency Analyzer",
+  "description": "A client-side React.js graduation project for linguistic and literary analysis of Arabic texts.",
+  "requestFramePermissions": []
+}
