@@ -123,19 +123,37 @@ export function stripPunctuation(text: string): string {
   return text.replace(/[^\p{L}\p{M}\p{N}\s]/gu, ' ');
 }
 
+const MAX_CACHE_SIZE = 1000;
+const PREFIX_CACHE = new Map<string, string>();
+const ROOT_CACHE = new Map<string, string>();
+
+const ARABIC_PREFIXES = ['وال', 'فال', 'كال', 'بال', 'لل', 'ال', 'و', 'ب', 'ف', 'ك', 'ل'];
+const STEM_PREFIXES3 = ['وال', 'فال', 'بال', 'كال', 'لل', 'است'];
+const STEM_PREFIXES2 = ['ال', 'سي'];
+const STEM_PREFIXES1 = ['و', 'ف', 'ب', 'ك', 'ل', 'ي', 'ت', 'ن', 'أ', 'م'];
+const STEM_SUFFIXES = ['ون', 'ين', 'ان', 'ات', 'وا', 'ها', 'هم', 'هن', 'كم', 'كن', 'نا', 'ية', 'ه', 'ة', 'ي', 'ك'];
+
 export function stripArabicPrefixes(word: string): string {
+  if (PREFIX_CACHE.has(word)) return PREFIX_CACHE.get(word)!;
+
+  let result = word;
   // Only strip if the remaining word is at least 2 characters long
-  const prefixes = ['وال', 'فال', 'كال', 'بال', 'لل', 'ال', 'و', 'ب', 'ف', 'ك', 'ل'];
-  for (const prefix of prefixes) {
+  for (const prefix of ARABIC_PREFIXES) {
     if (word.startsWith(prefix) && (word.length - prefix.length) >= 2) {
-      return word.slice(prefix.length);
+      result = word.slice(prefix.length);
+      break;
     }
   }
-  return word;
+
+  if (PREFIX_CACHE.size >= MAX_CACHE_SIZE) PREFIX_CACHE.clear();
+  PREFIX_CACHE.set(word, result);
+  return result;
 }
 
 // استخراج الجذور الخفيف (Arabic Light Stemmer)
 export function getArabicRoot(word: string): string {
+  if (ROOT_CACHE.has(word)) return ROOT_CACHE.get(word)!;
+
   let stem = word;
   let changed = true;
 
@@ -143,11 +161,7 @@ export function getArabicRoot(word: string): string {
     changed = false;
 
     // 1. إزالة السوابق المعقدة وحروف العطف والجر
-    const prefixes3 = ['وال', 'فال', 'بال', 'كال', 'لل', 'است'];
-    const prefixes2 = ['ال', 'سي'];
-    const prefixes1 = ['و', 'ف', 'ب', 'ك', 'ل', 'ي', 'ت', 'ن', 'أ', 'م'];
-
-    for (const p of prefixes3) {
+    for (const p of STEM_PREFIXES3) {
       if (stem.startsWith(p) && stem.length > p.length + 2) {
         stem = stem.substring(p.length);
         changed = true;
@@ -155,7 +169,7 @@ export function getArabicRoot(word: string): string {
       }
     }
     if (!changed) {
-      for (const p of prefixes2) {
+      for (const p of STEM_PREFIXES2) {
         if (stem.startsWith(p) && stem.length > p.length + 2) {
           stem = stem.substring(p.length);
           changed = true;
@@ -164,7 +178,7 @@ export function getArabicRoot(word: string): string {
       }
     }
     if (!changed) {
-      for (const p of prefixes1) {
+      for (const p of STEM_PREFIXES1) {
         if (stem.startsWith(p) && stem.length > p.length + 2) {
           stem = stem.substring(p.length);
           changed = true;
@@ -175,8 +189,7 @@ export function getArabicRoot(word: string): string {
 
     // 2. إزالة اللواحق والضمائر المتصلة
     if (!changed) {
-      const suffixes = ['ون', 'ين', 'ان', 'ات', 'وا', 'ها', 'هم', 'هن', 'كم', 'كن', 'نا', 'ية', 'ه', 'ة', 'ي', 'ك'];
-      for (const s of suffixes) {
+      for (const s of STEM_SUFFIXES) {
         if (stem.endsWith(s) && stem.length > s.length + 2) {
           stem = stem.substring(0, stem.length - s.length);
           changed = true;
@@ -189,8 +202,11 @@ export function getArabicRoot(word: string): string {
   // 4. توحيد الألف
   stem = stem.replace(/[أإآ]/g, 'ا');
 
-  // إرجاع الكلمة الأصلية إذا كان الجذر المتبقي قصيراً جداً
-  return stem.length >= 2 ? stem : word;
+  const result = stem.length >= 2 ? stem : word;
+
+  if (ROOT_CACHE.size >= MAX_CACHE_SIZE) ROOT_CACHE.clear();
+  ROOT_CACHE.set(word, result);
+  return result;
 }
 
 export function generateNgrams(tokens: string[], n: number): string[] {
@@ -533,6 +549,7 @@ export function analyzeAdvancedCorpus(docs: { id: string, name: string, text: st
     return {
       id: doc.id,
       name: doc.name,
+      wordCount: doc.wordCount,
       totalTokens: doc.totalTokens,
       uniqueTokens: doc.uniqueTokens,
       lexicalDiversity: doc.lexicalDiversity,
