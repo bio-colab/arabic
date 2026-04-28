@@ -32,6 +32,18 @@ export const ARABIC_STOPWORDS = new Set([
   "طالما", "كلما", "أينما", "إلا", "ألا", "هلا", "لولا", "لوما", "كلا"
 ]);
 
+// NLP Optimization Constants
+const MAX_CACHE_SIZE = 1000;
+const ARABIC_PREFIXES = ['وال', 'فال', 'كال', 'بال', 'لل', 'ال', 'و', 'ب', 'ف', 'ك', 'ل'];
+const STEM_PREFIXES_3 = ['وال', 'فال', 'بال', 'كال', 'لل', 'است'];
+const STEM_PREFIXES_2 = ['ال', 'سي'];
+const STEM_PREFIXES_1 = ['و', 'ف', 'ب', 'ك', 'ل', 'ي', 'ت', 'ن', 'أ', 'م'];
+const STEM_SUFFIXES = ['ون', 'ين', 'ان', 'ات', 'وا', 'ها', 'هم', 'هن', 'كم', 'كن', 'نا', 'ية', 'ه', 'ة', 'ي', 'ك'];
+
+// Bounded Memoization Caches
+const rootCache = new Map<string, string>();
+const prefixCache = new Map<string, string>();
+
 export interface NLPConfig {
   minWordLength: number;
   removeStopwords: boolean;
@@ -124,18 +136,26 @@ export function stripPunctuation(text: string): string {
 }
 
 export function stripArabicPrefixes(word: string): string {
+  if (prefixCache.has(word)) return prefixCache.get(word)!;
+
   // Only strip if the remaining word is at least 2 characters long
-  const prefixes = ['وال', 'فال', 'كال', 'بال', 'لل', 'ال', 'و', 'ب', 'ف', 'ك', 'ل'];
-  for (const prefix of prefixes) {
+  let result = word;
+  for (const prefix of ARABIC_PREFIXES) {
     if (word.startsWith(prefix) && (word.length - prefix.length) >= 2) {
-      return word.slice(prefix.length);
+      result = word.slice(prefix.length);
+      break;
     }
   }
-  return word;
+
+  if (prefixCache.size >= MAX_CACHE_SIZE) prefixCache.clear();
+  prefixCache.set(word, result);
+  return result;
 }
 
 // استخراج الجذور الخفيف (Arabic Light Stemmer)
 export function getArabicRoot(word: string): string {
+  if (rootCache.has(word)) return rootCache.get(word)!;
+
   let stem = word;
   let changed = true;
 
@@ -143,11 +163,7 @@ export function getArabicRoot(word: string): string {
     changed = false;
 
     // 1. إزالة السوابق المعقدة وحروف العطف والجر
-    const prefixes3 = ['وال', 'فال', 'بال', 'كال', 'لل', 'است'];
-    const prefixes2 = ['ال', 'سي'];
-    const prefixes1 = ['و', 'ف', 'ب', 'ك', 'ل', 'ي', 'ت', 'ن', 'أ', 'م'];
-
-    for (const p of prefixes3) {
+    for (const p of STEM_PREFIXES_3) {
       if (stem.startsWith(p) && stem.length > p.length + 2) {
         stem = stem.substring(p.length);
         changed = true;
@@ -155,7 +171,7 @@ export function getArabicRoot(word: string): string {
       }
     }
     if (!changed) {
-      for (const p of prefixes2) {
+      for (const p of STEM_PREFIXES_2) {
         if (stem.startsWith(p) && stem.length > p.length + 2) {
           stem = stem.substring(p.length);
           changed = true;
@@ -164,7 +180,7 @@ export function getArabicRoot(word: string): string {
       }
     }
     if (!changed) {
-      for (const p of prefixes1) {
+      for (const p of STEM_PREFIXES_1) {
         if (stem.startsWith(p) && stem.length > p.length + 2) {
           stem = stem.substring(p.length);
           changed = true;
@@ -175,8 +191,7 @@ export function getArabicRoot(word: string): string {
 
     // 2. إزالة اللواحق والضمائر المتصلة
     if (!changed) {
-      const suffixes = ['ون', 'ين', 'ان', 'ات', 'وا', 'ها', 'هم', 'هن', 'كم', 'كن', 'نا', 'ية', 'ه', 'ة', 'ي', 'ك'];
-      for (const s of suffixes) {
+      for (const s of STEM_SUFFIXES) {
         if (stem.endsWith(s) && stem.length > s.length + 2) {
           stem = stem.substring(0, stem.length - s.length);
           changed = true;
@@ -189,16 +204,31 @@ export function getArabicRoot(word: string): string {
   // 4. توحيد الألف
   stem = stem.replace(/[أإآ]/g, 'ا');
 
-  // إرجاع الكلمة الأصلية إذا كان الجذر المتبقي قصيراً جداً
-  return stem.length >= 2 ? stem : word;
+  const result = stem.length >= 2 ? stem : word;
+
+  if (rootCache.size >= MAX_CACHE_SIZE) rootCache.clear();
+  rootCache.set(word, result);
+  return result;
 }
 
 export function generateNgrams(tokens: string[], n: number): string[] {
   if (n <= 1) return tokens;
   const ngrams: string[] = [];
-  for (let i = 0; i <= tokens.length - n; i++) {
-    ngrams.push(tokens.slice(i, i + n).join(' '));
+
+  if (n === 2) {
+    for (let i = 0; i <= tokens.length - 2; i++) {
+      ngrams.push(tokens[i] + ' ' + tokens[i + 1]);
+    }
+  } else if (n === 3) {
+    for (let i = 0; i <= tokens.length - 3; i++) {
+      ngrams.push(tokens[i] + ' ' + tokens[i + 1] + ' ' + tokens[i + 2]);
+    }
+  } else {
+    for (let i = 0; i <= tokens.length - n; i++) {
+      ngrams.push(tokens.slice(i, i + n).join(' '));
+    }
   }
+
   return ngrams;
 }
 
@@ -238,43 +268,45 @@ export async function analyzeTextAsync(text: string, config: NLPConfig, onProgre
   if (onProgress) onProgress(10);
   await yieldToMain();
   
-  // 1. الدقة: استخراج الكلمات بناءً على المحرك الأساسي لحساب الكلمات الكلية قبل أي تصفية (مثل Google Docs)
   const rawWords = extractWords(text);
   const wordCount = rawWords.length;
   
   if (onProgress) onProgress(30);
   await yieldToMain();
   
-  // 2. إزالة التشكيل من الكلمات المستخرجة لتجهيزها للتحليل
-  let tokens = rawWords.map(w => removeDiacritics(w));
+  const CHUNK_SIZE = 5000;
+  const processedTokens: string[] = [];
   
-  if (onProgress) onProgress(40);
-  await yieldToMain();
-  
-  // Apply filters
-  if (config.removeStopwords) {
-    tokens = tokens.filter(t => !ARABIC_STOPWORDS.has(t));
+  for (let i = 0; i < rawWords.length; i += CHUNK_SIZE) {
+    const chunk = rawWords.slice(i, i + CHUNK_SIZE);
+    for (const rawWord of chunk) {
+      let token = removeDiacritics(rawWord);
+
+      if (config.removeStopwords && ARABIC_STOPWORDS.has(token)) continue;
+
+      if (config.useStemming) {
+        token = getArabicRoot(token);
+      } else if (config.stripPrefixes) {
+        token = stripArabicPrefixes(token);
+      }
+
+      if (token.length < config.minWordLength) continue;
+
+      processedTokens.push(token);
+    }
+
+    if (onProgress) {
+      const progress = 30 + Math.floor((i / rawWords.length) * 40);
+      onProgress(progress);
+    }
+    await yieldToMain();
   }
-  
-  if (onProgress) onProgress(50);
-  await yieldToMain();
-  
-  if (config.useStemming) {
-    tokens = tokens.map(getArabicRoot);
-  } else if (config.stripPrefixes) {
-    tokens = tokens.map(stripArabicPrefixes);
-  }
-  
-  if (onProgress) onProgress(60);
-  await yieldToMain();
-  
-  tokens = tokens.filter(t => t.length >= config.minWordLength);
   
   if (onProgress) onProgress(70);
   await yieldToMain();
   
   // Apply N-grams
-  const finalTokens = generateNgrams(tokens, config.ngramSize || 1);
+  const finalTokens = generateNgrams(processedTokens, config.ngramSize || 1);
   
   if (onProgress) onProgress(80);
   await yieldToMain();
@@ -311,30 +343,25 @@ export function analyzeText(text: string, config: NLPConfig): { results: WordFre
   const rawWords = extractWords(text);
   const wordCount = rawWords.length;
   
-  let tokens = rawWords.map(w => removeDiacritics(w));
-  
-  // Apply filters
-  if (config.removeStopwords) {
-    tokens = tokens.filter(t => !ARABIC_STOPWORDS.has(t));
+  const processedTokens: string[] = [];
+  for (const rawWord of rawWords) {
+    let token = removeDiacritics(rawWord);
+
+    if (config.removeStopwords && ARABIC_STOPWORDS.has(token)) continue;
+
+    if (config.useStemming) {
+      token = getArabicRoot(token);
+    } else if (config.stripPrefixes) {
+      token = stripArabicPrefixes(token);
+    }
+
+    if (token.length < config.minWordLength) continue;
+
+    processedTokens.push(token);
   }
-  
-  if (config.useStemming) {
-    tokens = tokens.map(getArabicRoot);
-  } else if (config.stripPrefixes) {
-    tokens = tokens.map(stripArabicPrefixes);
-  }
-  
-  tokens = tokens.filter(t => t.length >= config.minWordLength);
   
   // Generate N-grams
-  let ngrams: string[] = [];
-  if (config.ngramSize === 1) {
-    ngrams = tokens;
-  } else {
-    for (let i = 0; i <= tokens.length - config.ngramSize; i++) {
-      ngrams.push(tokens.slice(i, i + config.ngramSize).join(' '));
-    }
-  }
+  const ngrams = generateNgrams(processedTokens, config.ngramSize || 1);
   
   const totalTokens = ngrams.length;
   const readability = calculateReadability(text);
@@ -533,6 +560,7 @@ export function analyzeAdvancedCorpus(docs: { id: string, name: string, text: st
     return {
       id: doc.id,
       name: doc.name,
+      wordCount: doc.wordCount,
       totalTokens: doc.totalTokens,
       uniqueTokens: doc.uniqueTokens,
       lexicalDiversity: doc.lexicalDiversity,
